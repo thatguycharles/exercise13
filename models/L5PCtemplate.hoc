@@ -1,0 +1,456 @@
+// Author: Etay Hay, 2011
+//    Models of Neocortical Layer 5b Pyramidal Cells Capturing a Wide Range of
+//    Dendritic and Perisomatic Active Properties
+//    (Hay et al., PLoS Computational Biology, 2011) 
+//
+// Template for models of L5 Pyramidal Cell
+// Modified by Aman Aberra
+
+begintemplate L5PCtemplate
+  public init
+  public locateSites, getLongestBranch
+  public soma, dend, apic, axon, spine_neck, spine_head, getAbsSecIndex
+  public biophys
+  public all, somatic, apical, axonal, basal, nSecSoma, nSecApical, nSecBasal, nSecAxonal, nSecAll, nSecAxonalOrig, SecSyn, distribute_channels
+  public spine_necks, spine_heads, spines, nSecSpines, spine_seclist_name, spine_ind, spine_interv
+  public setpointers, xList, yList, zList
+//   public apic_spine_ind
+  objref SecSyn, this
+  objref all, somatic, apical, axonal, basal, spine_necks, spine_heads, spines
+  objref xList, yList, zList
+  strdef tstr, spine_seclist_name
+
+//$s1 - morphology file name
+proc init() {localobj nl,import
+    all = new SectionList()
+    somatic = new SectionList()
+    basal = new SectionList()
+    apical = new SectionList()
+    axonal = new SectionList()
+    spines = new SectionList()
+    spine_necks = new SectionList()
+    spine_heads = new SectionList()
+
+    forall delete_section()
+
+    nl = new Import3d_Neurolucida3()
+    nl.quiet = 1
+    nl.input($s1)
+    import = new Import3d_GUI(nl, 0)
+    import.instantiate(this)    
+    geom_nseg()
+    // Spine parameters
+    this.spine_seclist_name = $s2   
+    spine_ind = $3
+    this.spine_ind = spine_ind
+    spine_interv = $4   
+    this.spine_interv = spine_interv
+    if (this.spine_ind >= 0) add_spines(this.spine_seclist_name,this.spine_ind,this.spine_interv)
+    biophys()  
+    forsec this.all {
+        if(diam == 0){
+            diam =  1
+            printf("Error : Morphology problem with section [%s] 0 diam \n", secname())
+        }
+        insert xtra
+        insert extracellular
+    }  
+    define_shape()
+    setpointers()
+}
+
+create soma[1], dend[1], apic[1], axon[1], spine_neck[1], spine_head[1]
+
+proc geom() {
+}
+
+proc add_spines(){ local spine_ind, interv, x_pos, sec_len, neck_L, neck_diam, head_L, head_diam 
+    spine_seclist_name = $s1
+    spine_ind = $2
+    interv = $3  // place spine every interv um along branch
+    neck_L = 1 // spine neck length
+    neck_diam = 0.1 // spine neck diam
+    head_L = 0.5 // spine head length 
+    head_diam = 0.5 // spine head diam
+    if (strcmp(spine_seclist_name,"apical") == 0) {
+      this.apic[spine_ind] {
+        sec_len = L
+        nseg = 1 + 2*int(L/interv)
+        print "Set nseg to ", nseg, " in ", secname()        
+      }
+    } else {
+      this.dend[spine_ind] {
+        sec_len = L
+        nseg = 1 + 2*int(L/interv)
+        print "Set nseg to ", nseg, " in ", secname()        
+      }
+    }
+    
+    nSecSpines = int(sec_len/interv)
+    if (nSecSpines > 0){
+        create spine_neck[nSecSpines], spine_head[nSecSpines]
+        x_pos =  interv/sec_len        
+        if (strcmp(spine_seclist_name,"apical") == 0) {
+          // Add spines to apical dendritic branch (apic[spine_ind])
+          for i = 0,nSecSpines - 1 {
+            // print "i is ", i, "x_pos is", x_pos
+            this.apic[spine_ind] connect spine_neck[i](0), x_pos 
+            spine_neck[i] connect spine_head[i](0), 1
+            x_pos += interv/sec_len                  
+          }
+          forsec "spine_neck" {                 
+            nseg = 1
+            L = neck_L
+            diam = neck_diam           
+            this.spine_necks.append()
+            this.spines.append()
+            // this.apical.append()
+            this.all.append()                    
+          }        
+          forsec "spine_head"{
+            nseg = 1
+            L = head_L
+            diam = head_diam            
+            this.spine_heads.append()
+            this.spines.append()
+            // this.apical.append()           
+            this.all.append()      
+          }   
+          printf("Added %g spines to apic[%g] every %g um\n  neck_diam = %g um, head_diam = %g um\n",nSecSpines,spine_ind,interv,neck_diam,head_diam)  
+        } else {
+          // Add spines to basal dendritic branch (dend[spine_ind])
+          for i = 0,nSecSpines - 1 {       
+            this.dend[spine_ind] connect spine_neck[i](0), x_pos 
+            spine_neck[i] connect spine_head[i](0), 1
+            x_pos += interv/sec_len    
+          }
+          forsec "spine_neck" {                 
+            nseg = 1
+            L = 1
+            diam = 0.1            
+            this.spine_necks.append()
+            this.spines.append()
+            // this.basal.append()
+            this.all.append()                    
+          }        
+          forsec "spine_head"{
+            nseg = 1
+            L = 0.5
+            diam = 0.5            
+            this.spine_heads.append()
+            this.spines.append()
+            // this.basal.append()           
+            this.all.append()      
+          }   
+          printf("Added %g spines to dend[%g] every %g um\n  neck_diam = %g um, head_diam = %g um",nSecSpines,spine_ind,interv,neck_diam,head_diam)  
+        }
+                                 	        
+    }    
+}
+
+proc geom_nseg() {local nSec, L1, L2, D1, D2, nSeg1, nSeg2
+  soma area(.5) // make sure diam reflects 3d points
+  nSec = 0
+  forsec all {
+    nseg = 1 + 2*int(L/40)
+    nSec = nSec + 1
+  }
+
+  nSecAll = nSec
+  nSec = 0
+  forsec somatic { nSec = nSec + 1}
+  nSecSoma	= 	nSec
+  nSec = 0
+  forsec apical { nSec = nSec + 1}
+  nSecApical= 	nSec
+  nSec = 0
+  forsec basal { nSec = nSec + 1}
+  nSecBasal	= 	nSec
+  nSec = 0
+  forsec axonal { nSec = nSec + 1}
+  nSecAxonalOrig = nSecAxonal	= 	nSec
+}
+
+proc biophys() { localobj bp 
+	delete_axon()
+	area(0.5)
+	distance()  
+	access soma
+  bp = new L5PCbiophys()
+  bp.biophys(this,this.spine_ind,this.spine_seclist_name)
+  // if (strcmp(this.spine_seclist_name,"apical") == 0) {
+  //   if (this.spine_ind >= 0) apic[this.spine_ind].cm = 1 // revert cm of branch with spines to 1 uF/cm2
+  // }  else {
+  //   if (this.spine_ind >= 0) dend[this.spine_ind].cm = 1 
+  // }
+
+}
+
+// deleting axon, keeping only first 60 micrometers
+proc delete_axon(){
+    forsec axonal{delete_section()}
+    create axon[2]
+    access axon[0]{
+      L= 30
+      diam = 1
+      nseg = 1+2*int(L/40)
+      all.append()
+      axonal.append()
+    }
+    access axon[1]{
+      L= 30
+      diam = 1
+      nseg = 1+2*int(L/40)
+      all.append()
+      axonal.append()
+    }
+
+  nSecAxonal = 2
+  connect axon(0), soma(0.5)
+  connect axon[1](0), axon[0](1) 
+  access soma
+}
+
+proc distribute_channels()	{local dist,val,base,maxLength
+ // $s1 - section list name (string)
+ // $s2 - parameter name (string)
+ // $3 - distribution type (specified in calculate_distribution)
+ // $4 - $8 arguments 3-7 for calculate_distribution 
+	base = $8
+	soma distance()
+	maxLength = getLongestBranch($s1)
+
+	forsec $s1		{
+		if(0==strcmp($s2,"Ra")){
+			Ra = $8
+		} else {
+			for(x) {
+				if ($3==3) {
+					dist = distance(x)
+				} else {
+					dist = distance(x)/maxLength
+				}
+				val = calculate_distribution($3,dist,$4,$5,$6,$7,$8)
+				sprint(tstr,"%s(%-5.10f) = %-5.10f",$s2,x,val)
+				execute(tstr)
+			}
+		}
+	}
+}
+
+// $1 is the distribution type:
+//     0 linear, 1 sigmoid, 2 exponential
+//     3 step for absolute distance (in microns)
+// $2 is distance from soma, either normalized or in microns for distribution type 3
+// $3 - $7 are parameters in functions below
+func calculate_distribution()	{local value
+
+
+	if ($1==0)	{value = $3 + $2*$4}
+	if ($1==1) {value = $3 + ($4/(1+exp(($2-$5)/$6)))}
+  if ($1==2) {value = $3 + $6*exp($4*($2-$5))}
+	if ($1==3) {
+		if (($2 > $5) && ($2 < $6)) { // distance > 
+			value = $3
+		} else {
+			value = $4
+		}
+	}
+	value = value*$7
+	return value
+}
+
+// $s1 section
+func getLongestBranch(){local maxL,d localobj distallist,sref
+    sprint(tstr,"%s distance()",$s1)
+    execute(tstr,this)    
+    
+  	if(0==strcmp($s1,"axon")){
+      sprint(tstr,"%s[0] distance(1)",$s1)
+      execute(tstr,this)    
+  	}
+
+		maxL = 0
+		d = 0
+		distallist = new SectionList()
+		forsec $s1 {
+			sref = new SectionRef()
+			if (sref.nchild==0) distallist.append()
+		}
+		forsec distallist{
+			d = distance(1)
+			if(maxL<d) maxL = d
+		}
+		// for the soma case
+		if (maxL == 0) {
+      $s1 {
+        maxL = L
+      }
+    }
+		return maxL
+	}
+
+// $s1 section
+// $2 distance x in micrometers
+// return list of [1,2] vectors  - of the appropriate section and the location in each vector
+obfunc locateSites() {local maxL,site,d0,d1,siteX,i localobj vv,ll
+	ll = new List()
+
+  sprint(tstr,"%s distance()",$s1)
+  execute(tstr,this)    
+    
+	if(0==strcmp($s1,"axon")){
+    sprint(tstr,"%s[0] distance(1)",$s1)
+    execute(tstr,this)    
+	}
+
+	maxL = getLongestBranch($s1)
+	site = $2
+	i = 0
+	forsec $s1 {
+    if (distance(0) < distance(1)) {
+  		d0 = distance(0)
+  		d1 = distance(1)
+  	} else {
+  		d1 = distance(0)
+  		d0 = distance(1)
+  	}
+
+    if (site <= d1 && site >= d0) {
+      siteX = (site-d0)/(d1-d0)
+      secNum = i
+      vv = new Vector()
+      ll.append(vv.append(secNum,siteX))
+		}
+		i = i+1
+	}
+  return ll
+}
+
+func getAbsSecIndex(){ local nAbsInd, index  localobj str,strObj
+    strObj  =  new StringFunctions()
+    str     =  new String()
+    nAbsInd = 0
+    index   = 0
+    if(strObj.substr($s1, "soma") > 0) {
+        strObj.tail($s1, "soma", str.s)
+        if(sscanf(str.s, "%*c%d", &index) < 0) {
+            index = 0
+        }
+        nAbsInd = index
+    }else if (strObj.substr($s1, "axon") >0) {
+        strObj.tail($s1, "axon", str.s)
+        if(sscanf(str.s, "%*c%d", &index) < 0) {
+            index = 0
+        }
+        nAbsInd = nSecSoma + index
+    }else if (strObj.substr($s1, "dend") >0) {
+        strObj.tail($s1, "dend", str.s)
+        if(sscanf(str.s, "%*c%d", &index) < 0) {
+            index = 0
+        }
+        nAbsInd = nSecSoma + nSecAxonalOrig + index
+    }else if (strObj.substr($s1, "apic") > 0) {
+        strObj.tail($s1, "apic", str.s)
+        if(sscanf(str.s, "%*c%d", &index) < 0) {
+            index = 0
+        }
+        nAbsInd = nSecSoma + nSecAxonalOrig + nSecBasal + index
+    }
+    return nAbsInd
+}
+
+proc setpointers() { local done    
+    getcoords(this) // get secrefs, coordinates (x_xtra, y_xtra, z_xtra), and assign type_xtra and order_xtra
+    forsec all {
+        if (ismembrane("xtra") && ismembrane("extracellular")) {
+            for (x, 0) {
+                setpointer ex_xtra(x), e_extracellular(x)
+            }
+        }
+    }
+    // print "After any change to cell geometry or nseg, be sure to invoke setpointers()"
+}
+
+proc getcoords() { local ii, nn, kk, xr, xr1 localobj xx, yy, zz, length, xint, yint, zint, range
+	// list of segment coordinates from each section
+	objref xList, yList, zList
+	xList = new List()
+	yList = new List()
+	zList = new List()
+	xList.remove_all()
+	yList.remove_all()
+	zList.remove_all()
+	forsec $o1.all {
+		if (ismembrane("xtra")) {
+		// get the data for the section
+		nn = n3d()		// number of pt3d() points
+		xx = new Vector(nn) //creates xx vector length of nn
+		yy = new Vector(nn)
+		zz = new Vector(nn)
+		length = new Vector(nn)
+		for ii = 0,nn-1 {
+			xx.x[ii] = x3d(ii) //loops through points in sec, assigns x coordinate to xx
+			yy.x[ii] = y3d(ii) // assigns y coordinates to yy
+			zz.x[ii] = z3d(ii) // assigns z coordinates to zz
+			length.x[ii] = arc3d(ii) // length position of point
+		}
+
+		// to use Vector class's .interpolate()
+		// must first scale the independent variable
+		// i.e. normalize length along centroid
+		length.div(length.x[nn-1])
+
+		// initialize the destination "independent" vector
+		range = new Vector(nseg+2) //nseg+2 because counts centers of each seg + 0 and 1
+		range.indgen(1/nseg) //stepsize is 1/nseg, normalized to go from 0 to 1
+		range.sub(1/(2*nseg))
+		range.x[0]=0
+		range.x[nseg+1]=1
+
+		// length contains the normalized distances of the pt3d points
+		// along the centroid of the section.  These are spaced at
+		// irregular intervals.
+		// range contains the normalized distances of the nodes along the
+		// centroid of the section.  These are spaced at regular intervals.
+		// Ready to interpolate.
+
+		xint = new Vector(nseg+2)
+		yint = new Vector(nseg+2)
+		zint = new Vector(nseg+2)
+		xint.interpolate(range, length, xx)
+		yint.interpolate(range, length, yy)
+		zint.interpolate(range, length, zz)
+
+		// for each node, assign the xyz values to x_xtra, y_xtra, z_xtra
+		//		for ii = 0, nseg+1 {
+		// don't bother computing coords of the 0 and 1 ends
+		// also avoid writing coords of the 1 end into the last internal node's coords
+		// Calculate first compartment seperately
+		for ii = 1, nseg {
+      xr = range.x[ii]
+      xr_i = range.x[ii-1]
+      x_xtra(xr) = xint.x[ii] //save section coordinates using xtra mechanism
+      y_xtra(xr) = yint.x[ii]
+      z_xtra(xr) = zint.x[ii]
+    }
+
+		// remove coords of 0 and 1 ends before adding to coord list
+		// for exporting to text file
+
+		xint.remove(nseg+1)
+		xint.remove(0)
+		yint.remove(nseg+1)
+		yint.remove(0)
+		zint.remove(nseg+1)
+		zint.remove(0)
+
+
+		xList.append(xint) //add section's interpolated coordinates to list
+		yList.append(yint)
+		zList.append(zint)
+		}
+	}
+}
+
+endtemplate L5PCtemplate
